@@ -1,52 +1,33 @@
 """
-美股交易决策系统 v1.0
+美股交易决策系统 v1.2
 输入：股票代码（如 AAPL, TSLA, NVDA）
 输出：日K级别的买卖决策
 """
 
+import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
 import sys
+import time
 
 
-def get_stock_data(symbol, period="6mo"):
-    """获取股票历史数据 - 使用yfinance"""
-    try:
-        import yfinance as yf
-        stock = yf.Ticker(symbol)
-        df = stock.history(period=period)
-        return df
-    except Exception as e:
-        print(f"获取数据失败: {e}")
-        return None
-
-
-def generate_sample_data():
-    """生成模拟数据用于演示"""
-    dates = pd.date_range(end=datetime.now(), periods=120, freq='D')
-    np.random.seed(42)
+def get_stock_data(symbol, period="1y", max_retries=5, retry_delay=10):
+    """获取股票历史数据 - 使用yfinance，带重试机制"""
+    for attempt in range(max_retries):
+        try:
+            print(f"  尝试 {attempt + 1}/{max_retries}...")
+            stock = yf.Ticker(symbol)
+            df = stock.history(period=period)
+            if df is not None and not df.empty:
+                return df
+            print(f"  返回数据为空，{retry_delay}秒后重试...")
+        except Exception as e:
+            print(f"  错误: {e}，{retry_delay}秒后重试...")
+        
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
     
-    # 模拟股价走势
-    price = 150
-    prices = []
-    volumes = []
-    
-    for i in range(120):
-        change = np.random.randn() * 2
-        price = price + change
-        prices.append(price)
-        volumes.append(1000000 + np.random.randint(-200000, 500000))
-    
-    df = pd.DataFrame({
-        'Open': prices,
-        'High': [p + np.random.random() * 2 for p in prices],
-        'Low': [p - np.random.random() * 2 for p in prices],
-        'Close': prices,
-        'Volume': volumes
-    }, index=dates)
-    
-    return df
+    return None
 
 
 def calculate_indicators(df):
@@ -188,15 +169,15 @@ def make_decision(signals):
 
 def trade_signal(symbol):
     """主函数：输入股票代码，返回交易决策"""
-    print(f"📊 正在分析 {symbol}...")
+    print(f"📊 正在获取 {symbol} 数据（请耐心等待，可能需要多次重试）...")
     
-    # 尝试获取真实数据，如果失败则使用模拟数据
-    df = get_stock_data(symbol)
+    # 获取数据
+    df = get_stock_data(symbol, max_retries=5, retry_delay=10)
+    
     if df is None or df.empty:
-        print("⚠️ 无法获取真实数据，使用模拟数据演示...")
-        df = generate_sample_data()
-    else:
-        print(f"✅ 成功获取 {len(df)} 条数据")
+        return {"error": f"无法获取 {symbol} 的数据，请稍后再试"}
+    
+    print(f"✅ 成功获取 {len(df)} 条数据")
     
     # 计算指标
     df = calculate_indicators(df)
@@ -229,6 +210,10 @@ def trade_signal(symbol):
 
 def print_result(result):
     """打印结果"""
+    if "error" in result:
+        print(f"❌ {result['error']}")
+        return
+    
     print(f"\n{'='*55}")
     print(f"📈 股票: {result['symbol']}")
     print(f"💰 最新价格: ${result['latest_price']:.2f}")
