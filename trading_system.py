@@ -1,7 +1,7 @@
 """
 US Stock Trading Decision System
 Technical Analysis based trading signals
-Version 2.0 - Added ATR, Position Sizing, Risk Management
+Version 2.1 - Added KDJ, Support/Resistance
 """
 
 import yfinance as yf
@@ -40,6 +40,21 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
     return macd_line, signal_line, histogram
 
 
+def calculate_kdj(high, low, close, n=9, m1=3, m2=3):
+    """计算KDJ指标"""
+    lowest_low = low.rolling(window=n).min()
+    highest_high = high.rolling(window=n).max()
+    
+    rsv = (close - lowest_low) / (highest_high - lowest_low) * 100
+    rsv = rsv.fillna(50)
+    
+    k = rsv.ewm(alpha=1/m1, adjust=False).mean()
+    d = k.ewm(alpha=1/m2, adjust=False).mean()
+    j = 3 * k - 2 * d
+    
+    return k, d, j
+
+
 def calculate_ma(prices, periods=[5, 20, 60]):
     """计算移动平均线"""
     ma_dict = {}
@@ -71,6 +86,27 @@ def calculate_atr(df, period=14):
     atr = tr.rolling(window=period).mean()
     
     return atr
+
+
+def calculate_support_resistance(close, period=20):
+    """计算支撑位和阻力位"""
+    # 最近N天的最高点和最低点
+    highest = close.rolling(window=period).max()
+    lowest = close.rolling(window=period).min()
+    
+    # 斐波那契回撤位
+    diff = highest - lowest
+    resistance_1 = highest
+    resistance_2 = highest - diff * 0.382
+    support_1 = lowest
+    support_2 = lowest + diff * 0.382
+    
+    return {
+        'resistance_1': resistance_1,
+        'resistance_2': resistance_2,
+        'support_1': support_1,
+        'support_2': support_2
+    }
 
 
 def calculate_volume_ma(volume, period=20):
@@ -109,11 +145,13 @@ def generate_signal(df, symbol):
     # 计算各项指标
     rsi = calculate_rsi(close)
     macd_line, signal_line, histogram = calculate_macd(close)
+    k, d, j = calculate_kdj(high, low, close)
     ma_dict = calculate_ma(close)
     ma5, ma20, ma60 = ma_dict['MA5'], ma_dict['MA20'], ma_dict['MA60']
     upper_band, middle_band, lower_band = calculate_bollinger_bands(close)
     vol_ma = calculate_volume_ma(volume)
     atr = calculate_atr(df)
+    sr = calculate_support_resistance(close)
     
     # 最新数据
     latest = df.iloc[-1]
@@ -121,12 +159,16 @@ def generate_signal(df, symbol):
     latest_macd = macd_line.iloc[-1]
     latest_signal = signal_line.iloc[-1]
     latest_hist = histogram.iloc[-1]
+    latest_k = k.iloc[-1]
+    latest_d = d.iloc[-1]
+    latest_j = j.iloc[-1]
     latest_ma5 = ma5.iloc[-1]
     latest_ma20 = ma20.iloc[-1]
     latest_ma60 = ma60.iloc[-1]
     latest_vol = latest['Volume']
     latest_close = latest['Close']
     latest_atr = atr.iloc[-1]
+    latest_sr = {k: v.iloc[-1] for k, v in sr.items()}
     
     # 成交量判断
     vol_ratio = latest_vol / vol_ma.iloc[-1] if vol_ma.iloc[-1] > 0 else 1
@@ -140,63 +182,71 @@ def generate_signal(df, symbol):
     
     # RSI评分
     if latest_rsi < 30:
-        buy_score += 25
+        buy_score += 20
     elif latest_rsi < 40:
-        buy_score += 15
+        buy_score += 10
     elif latest_rsi > 70:
-        sell_score += 25
+        sell_score += 20
     elif latest_rsi > 60:
-        sell_score += 15
+        sell_score += 10
     
     # MACD评分
-    if latest_hist > 0:  # 金叉
-        buy_score += 20
-    else:  # 死叉
-        sell_score += 20
-    
-    # 均线评分
-    if latest_ma5 > latest_ma20:
+    if latest_hist > 0:
         buy_score += 15
     else:
         sell_score += 15
     
+    # KDJ评分 (超买超卖更灵敏)
+    if latest_k < 20 or latest_j < 0:
+        buy_score += 15  # 超卖
+    elif latest_k > 80 or latest_j > 100:
+        sell_score += 15  # 超买
+    # 金叉死叉
+    if latest_k > latest_d:
+        buy_score += 10
+    else:
+        sell_score += 10
+    
+    # 均线评分
+    if latest_ma5 > latest_ma20:
+        buy_score += 10
+    else:
+        sell_score += 10
+    
     # 成交量评分
     if vol_ratio > 1.5:
-        if latest_close > close.iloc[-2]:  # 上涨放量
-            buy_score += 15
-        else:  # 下跌放量
-            sell_score += 15
-    elif vol_ratio < 0.5:
-        buy_score -= 5
-        sell_score -= 5
+        if latest_close > close.iloc[-2]:
+            buy_score += 10
+        else:
+            sell_score += 10
     
     # 趋势评分
     if trend == "强势上涨":
-        buy_score += 15
-    elif trend == "强势下跌":
-        sell_score += 15
-    elif trend == "上涨趋势":
         buy_score += 10
-    elif trend == "下跌趋势":
+    elif trend == "强势下跌":
         sell_score += 10
+    elif trend == "上涨趋势":
+        buy_score += 5
+    elif trend == "下跌趋势":
+        sell_score += 5
     
     # 布林带评分
     if latest_close < lower_band.iloc[-1]:
-        buy_score += 10
+        buy_score += 5
     elif latest_close > upper_band.iloc[-1]:
-        sell_score += 10
+        sell_score += 5
     
     # 计算仓位
     position_size = calculate_position_size(latest_atr, latest_close)
     
     # 生成决策
-    if buy_score >= 60:
+    if buy_score >= 55:
         decision = "强烈买入"
-    elif buy_score >= 40:
+    elif buy_score >= 35:
         decision = "建议买入"
-    elif sell_score >= 60:
+    elif sell_score >= 55:
         decision = "强烈卖出"
-    elif sell_score >= 40:
+    elif sell_score >= 35:
         decision = "建议卖出"
     else:
         decision = "观望"
@@ -207,7 +257,7 @@ def generate_signal(df, symbol):
     if latest_rsi > 70 or latest_rsi < 30:
         risk_level = "高"
         risk_warning = "RSI超买/超卖区域，注意风险"
-    elif atr.iloc[-1] / latest_close > 0.05:  # ATR波动>5%
+    elif latest_atr / latest_close > 0.05:
         risk_level = "中"
         risk_warning = "波动较大，建议轻仓"
     
@@ -219,6 +269,9 @@ def generate_signal(df, symbol):
         "atr": round(latest_atr, 2),
         "atr_percent": round(latest_atr / latest_close * 100, 2),
         "rsi": round(latest_rsi, 2),
+        "kdj_k": round(latest_k, 2),
+        "kdj_d": round(latest_d, 2),
+        "kdj_j": round(latest_j, 2),
         "macd": round(latest_macd, 2),
         "macd_signal": round(latest_signal, 2),
         "ma5": round(latest_ma5, 2),
@@ -226,6 +279,10 @@ def generate_signal(df, symbol):
         "ma60": round(latest_ma60, 2),
         "trend": trend,
         "volume_ratio": round(vol_ratio, 2),
+        "resistance_1": round(latest_sr['resistance_1'], 2),
+        "resistance_2": round(latest_sr['resistance_2'], 2),
+        "support_1": round(latest_sr['support_1'], 2),
+        "support_2": round(latest_sr['support_2'], 2),
         "buy_score": buy_score,
         "sell_score": sell_score,
         "decision": decision,
@@ -237,27 +294,35 @@ def generate_signal(df, symbol):
 
 def print_report(data):
     """打印分析报告"""
-    print(f"\n{'='*60}")
+    print(f"\n{'='*65}")
     print(f"📊 股票分析报告: {data['symbol']} ({data['date']})")
-    print(f"{'='*60}")
+    print(f"{'='*65}")
     print(f"💰 当前价格: ${data['latest_price']}")
     print(f"📈 成交量: {data['latest_volume']:,} (量比: {data['volume_ratio']})")
     print(f"📊 ATR波动: {data['atr']} ({data['atr_percent']}%)")
+    
     print(f"\n📊 技术指标:")
     print(f"  RSI(14): {data['rsi']}")
+    print(f"  KDJ: K={data['kdj_k']}, D={data['kdj_d']}, J={data['kdj_j']}")
     print(f"  MACD: {data['macd']} (信号线: {data['macd_signal']})")
     print(f"  MA5: {data['ma5']}, MA20: {data['ma20']}, MA60: {data['ma60']}")
     print(f"  趋势: {data['trend']}")
+    
+    print(f"\n🎯 支撑/阻力位:")
+    print(f"  阻力位: ${data['resistance_1']} / ${data['resistance_2']}")
+    print(f"  支撑位: ${data['support_1']} / ${data['support_2']}")
+    
     print(f"\n🎯 决策评分:")
     print(f"  买入评分: {data['buy_score']}/100")
     print(f"  卖出评分: {data['sell_score']}/100")
     print(f"\n💡 最终决策: {data['decision']}")
+    
     print(f"\n📊 仓位建议:")
     print(f"  建议仓位: {data['position_size']} 股 (风险偏好2%)")
     print(f"  风险等级: {data['risk_level']}")
     if data['risk_warning']:
         print(f"  ⚠️ 风险提示: {data['risk_warning']}")
-    print(f"{'='*60}\n")
+    print(f"{'='*65}\n")
 
 
 def analyze_multiple(symbols):
