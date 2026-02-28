@@ -25,6 +25,13 @@ if __name__ == "__main__":
     print("5 - 3 =", subtract(5, 3))
     print("3 * 4 =", multiply(3, 4))
     print("10 / 2 =", divide(10, 2))
-    print("5 / 0 =", divide(5, 0))  # Should raise exception
+    
+    # Test power and modulo
     print("2 ** 3 =", power(2, 3))
     print("10 % 3 =", modulo(10, 3))
+    
+    # Test exception handling
+    try:
+        divide(5, 0)
+    except ValueError as e:
+        print("divide(5, 0) raised:", e)
