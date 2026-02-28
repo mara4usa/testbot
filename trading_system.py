@@ -1,6 +1,7 @@
 """
 US Stock Trading Decision System
 Technical Analysis based trading signals
+Version 2.0 - Added ATR, Position Sizing, Risk Management
 """
 
 import yfinance as yf
@@ -9,18 +10,14 @@ import numpy as np
 from datetime import datetime, timedelta
 
 
-def get_stock_data(symbol, period="6mo"):
+def get_stock_data(symbol, period="1y"):
     """获取股票数据"""
-    try:
-        stock = yf.Ticker(symbol)
-        df = stock.history(period=period)
-        if df.empty:
-            return None
-        df['Symbol'] = symbol  # 添加股票代码列
-        return df
-    except Exception as e:
-        print(f"Error fetching {symbol}: {e}")
+    stock = yf.Ticker(symbol)
+    df = stock.history(period=period)
+    if df.empty:
         return None
+    df['Symbol'] = symbol
+    return df
 
 
 def calculate_rsi(prices, period=14):
@@ -60,6 +57,22 @@ def calculate_bollinger_bands(prices, period=20, std_dev=2):
     return upper_band, ma, lower_band
 
 
+def calculate_atr(df, period=14):
+    """计算ATR (Average True Range) 波动率指标"""
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
+    
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    
+    return atr
+
+
 def calculate_volume_ma(volume, period=20):
     """计算成交量均线"""
     return volume.rolling(window=period).mean()
@@ -68,21 +81,30 @@ def calculate_volume_ma(volume, period=20):
 def analyze_trend(prices, ma5, ma20, ma60):
     """分析趋势"""
     if ma5 > ma20 > ma60:
-        return "strong_uptrend"
+        return "强势上涨"
     elif ma5 > ma20:
-        return "uptrend"
+        return "上涨趋势"
     elif ma5 < ma20 < ma60:
-        return "strong_downtrend"
+        return "强势下跌"
     elif ma5 < ma20:
-        return "downtrend"
+        return "下跌趋势"
     else:
-        return "sideways"
+        return "横盘整理"
+
+
+def calculate_position_size(atr, price, account_size=100000, risk_percent=2):
+    """计算仓位大小"""
+    risk_amount = account_size * (risk_percent / 100)
+    position_size = risk_amount / atr
+    return int(position_size)
 
 
 def generate_signal(df, symbol):
     """生成交易信号"""
     close = df['Close']
     volume = df['Volume']
+    high = df['High']
+    low = df['Low']
     
     # 计算各项指标
     rsi = calculate_rsi(close)
@@ -91,6 +113,7 @@ def generate_signal(df, symbol):
     ma5, ma20, ma60 = ma_dict['MA5'], ma_dict['MA20'], ma_dict['MA60']
     upper_band, middle_band, lower_band = calculate_bollinger_bands(close)
     vol_ma = calculate_volume_ma(volume)
+    atr = calculate_atr(df)
     
     # 最新数据
     latest = df.iloc[-1]
@@ -103,6 +126,7 @@ def generate_signal(df, symbol):
     latest_ma60 = ma60.iloc[-1]
     latest_vol = latest['Volume']
     latest_close = latest['Close']
+    latest_atr = atr.iloc[-1]
     
     # 成交量判断
     vol_ratio = latest_vol / vol_ma.iloc[-1] if vol_ma.iloc[-1] > 0 else 1
@@ -147,20 +171,23 @@ def generate_signal(df, symbol):
         sell_score -= 5
     
     # 趋势评分
-    if trend == "strong_uptrend":
+    if trend == "强势上涨":
         buy_score += 15
-    elif trend == "strong_downtrend":
+    elif trend == "强势下跌":
         sell_score += 15
-    elif trend == "uptrend":
+    elif trend == "上涨趋势":
         buy_score += 10
-    elif trend == "downtrend":
+    elif trend == "下跌趋势":
         sell_score += 10
     
     # 布林带评分
     if latest_close < lower_band.iloc[-1]:
-        buy_score += 10  # 触及下轨，可能反弹
+        buy_score += 10
     elif latest_close > upper_band.iloc[-1]:
-        sell_score += 10  # 触及上轨，可能回调
+        sell_score += 10
+    
+    # 计算仓位
+    position_size = calculate_position_size(latest_atr, latest_close)
     
     # 生成决策
     if buy_score >= 60:
@@ -174,10 +201,23 @@ def generate_signal(df, symbol):
     else:
         decision = "观望"
     
+    # 风险评估
+    risk_level = "低"
+    risk_warning = ""
+    if latest_rsi > 70 or latest_rsi < 30:
+        risk_level = "高"
+        risk_warning = "RSI超买/超卖区域，注意风险"
+    elif atr.iloc[-1] / latest_close > 0.05:  # ATR波动>5%
+        risk_level = "中"
+        risk_warning = "波动较大，建议轻仓"
+    
     return {
         "symbol": symbol,
+        "date": datetime.now().strftime("%Y-%m-%d"),
         "latest_price": round(latest_close, 2),
         "latest_volume": int(latest_vol),
+        "atr": round(latest_atr, 2),
+        "atr_percent": round(latest_atr / latest_close * 100, 2),
         "rsi": round(latest_rsi, 2),
         "macd": round(latest_macd, 2),
         "macd_signal": round(latest_signal, 2),
@@ -188,17 +228,21 @@ def generate_signal(df, symbol):
         "volume_ratio": round(vol_ratio, 2),
         "buy_score": buy_score,
         "sell_score": sell_score,
-        "decision": decision
+        "decision": decision,
+        "position_size": position_size,
+        "risk_level": risk_level,
+        "risk_warning": risk_warning
     }
 
 
 def print_report(data):
     """打印分析报告"""
-    print(f"\n{'='*50}")
-    print(f"📊 股票分析报告: {data['symbol']}")
-    print(f"{'='*50}")
+    print(f"\n{'='*60}")
+    print(f"📊 股票分析报告: {data['symbol']} ({data['date']})")
+    print(f"{'='*60}")
     print(f"💰 当前价格: ${data['latest_price']}")
     print(f"📈 成交量: {data['latest_volume']:,} (量比: {data['volume_ratio']})")
+    print(f"📊 ATR波动: {data['atr']} ({data['atr_percent']}%)")
     print(f"\n📊 技术指标:")
     print(f"  RSI(14): {data['rsi']}")
     print(f"  MACD: {data['macd']} (信号线: {data['macd_signal']})")
@@ -208,7 +252,12 @@ def print_report(data):
     print(f"  买入评分: {data['buy_score']}/100")
     print(f"  卖出评分: {data['sell_score']}/100")
     print(f"\n💡 最终决策: {data['decision']}")
-    print(f"{'='*50}\n")
+    print(f"\n📊 仓位建议:")
+    print(f"  建议仓位: {data['position_size']} 股 (风险偏好2%)")
+    print(f"  风险等级: {data['risk_level']}")
+    if data['risk_warning']:
+        print(f"  ⚠️ 风险提示: {data['risk_warning']}")
+    print(f"{'='*60}\n")
 
 
 def analyze_multiple(symbols):
@@ -230,11 +279,10 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        # 默认分析几个热门股票
         print("Usage: python trading_system.py <stock_symbol> [symbol2] ...")
         print("Example: python trading_system.py AAPL TSLA MSFT")
-        print("\n分析默认股票列表: AAPL, TSLA, MSFT, GOOGL, NVDA")
-        symbols = ["AAPL", "TSLA", "MSFT", "GOOGL", "NVDA"]
+        print("\n分析默认股票列表: AAPL, TSLA, MSFT, GOOGL, NVDA, META")
+        symbols = ["AAPL", "TSLA", "MSFT", "GOOGL", "NVDA", "META"]
         analyze_multiple(symbols)
     else:
         symbols = sys.argv[1:]
