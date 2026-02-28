@@ -11,9 +11,16 @@ from datetime import datetime, timedelta
 
 def get_stock_data(symbol, period="6mo"):
     """获取股票数据"""
-    stock = yf.Ticker(symbol)
-    df = stock.history(period=period)
-    return df
+    try:
+        stock = yf.Ticker(symbol)
+        df = stock.history(period=period)
+        if df.empty:
+            return None
+        df['Symbol'] = symbol  # 添加股票代码列
+        return df
+    except Exception as e:
+        print(f"Error fetching {symbol}: {e}")
+        return None
 
 
 def calculate_rsi(prices, period=14):
@@ -72,7 +79,7 @@ def analyze_trend(prices, ma5, ma20, ma60):
         return "sideways"
 
 
-def generate_signal(df):
+def generate_signal(df, symbol):
     """生成交易信号"""
     close = df['Close']
     volume = df['Volume']
@@ -168,7 +175,7 @@ def generate_signal(df):
         decision = "观望"
     
     return {
-        "symbol": df.index[0].strftime("%Y-%m-%d") if hasattr(df.index[0], 'strftime') else str(df.index[0]),
+        "symbol": symbol,
         "latest_price": round(latest_close, 2),
         "latest_volume": int(latest_vol),
         "rsi": round(latest_rsi, 2),
@@ -188,7 +195,7 @@ def generate_signal(df):
 def print_report(data):
     """打印分析报告"""
     print(f"\n{'='*50}")
-    print(f"📊 股票分析报告: {data.get('symbol', 'N/A')}")
+    print(f"📊 股票分析报告: {data['symbol']}")
     print(f"{'='*50}")
     print(f"💰 当前价格: ${data['latest_price']}")
     print(f"📈 成交量: {data['latest_volume']:,} (量比: {data['volume_ratio']})")
@@ -204,21 +211,31 @@ def print_report(data):
     print(f"{'='*50}\n")
 
 
+def analyze_multiple(symbols):
+    """批量分析多只股票"""
+    results = []
+    for symbol in symbols:
+        print(f"📥 正在分析 {symbol}...")
+        df = get_stock_data(symbol)
+        if df is not None:
+            result = generate_signal(df, symbol)
+            results.append(result)
+            print_report(result)
+        else:
+            print(f"❌ 无法获取 {symbol} 的数据")
+    return results
+
+
 if __name__ == "__main__":
     import sys
+    
     if len(sys.argv) < 2:
-        print("Usage: python trading_system.py <stock_symbol>")
-        print("Example: python trading_system.py AAPL")
-        sys.exit(1)
-    
-    symbol = sys.argv[1]
-    print(f"📥 正在获取 {symbol} 数据...")
-    df = get_stock_data(symbol)
-    
-    if df.empty:
-        print(f"❌ 无法获取 {symbol} 的数据")
-        sys.exit(1)
-    
-    print(f"✅ 获取到 {len(df)} 条数据")
-    result = analyze_trend_report = generate_signal(df)
-    print_report(generate_signal(df))
+        # 默认分析几个热门股票
+        print("Usage: python trading_system.py <stock_symbol> [symbol2] ...")
+        print("Example: python trading_system.py AAPL TSLA MSFT")
+        print("\n分析默认股票列表: AAPL, TSLA, MSFT, GOOGL, NVDA")
+        symbols = ["AAPL", "TSLA", "MSFT", "GOOGL", "NVDA"]
+        analyze_multiple(symbols)
+    else:
+        symbols = sys.argv[1:]
+        analyze_multiple(symbols)
