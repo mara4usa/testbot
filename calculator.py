@@ -9,17 +9,22 @@ def multiply(a, b):
 
 def divide(a, b):
     if b == 0:
-        return "Error: Division by zero"
+        raise ValueError("Division by zero")
     return a / b
 
-# Test
-print("1 + 2 =", add(1, 2))
-print("5 - 3 =", subtract(5, 3))
-print("3 * 4 =", multiply(3, 4))
-print("10 / 2 =", divide(10, 2))
+def power(a, b):
+    return a ** b
 
-# BUG REPORT:
-# 1. Test code should be inside "if __name__ == '__main__':"
-# 2. divide() returns string on error, should raise exception
-# 3. Missing power operator (**)
-# 4. Missing modulo operator (%)
+def modulo(a, b):
+    if b == 0:
+        raise ValueError("Modulo by zero")
+    return a % b
+
+if __name__ == "__main__":
+    print("1 + 2 =", add(1, 2))
+    print("5 - 3 =", subtract(5, 3))
+    print("3 * 4 =", multiply(3, 4))
+    print("10 / 2 =", divide(10, 2))
+    print("5 / 0 =", divide(5, 0))  # Should raise exception
+    print("2 ** 3 =", power(2, 3))
+    print("10 % 3 =", modulo(10, 3))
